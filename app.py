@@ -1,12 +1,10 @@
 import json
 import os
 import re
-from typing import List, Dict, Optional
+from typing import List, Dict
 from message import LangChainMessageAPI
 from prompt import (
-    CHAIN_OF_THOUGHT_TEMPLATE,
     TRAINING_PROMPT_TEMPLATE,
-    ROLE_RESPONSE_PROMPT_TEMPLATE,
     EVALUATION_PROMPT_TEMPLATE,
     ETHICAL_EVALUATION_SYSTEM_PROMPT,
     ETHICAL_EVALUATION_TEMPLATE,
@@ -34,41 +32,6 @@ class RoleSafetyAnalyzer:
         
         print(f"Loaded {len(self.examples)} examples")
     
-    def show_statistics(self):
-        """Display data statistics"""
-        print("\n" + "=" * 70)
-        print("Data Statistics")
-        print("=" * 70)
-        
-        # Role distribution
-        roles = {}
-        risk_categories = {}
-        
-        for ex in self.examples:
-            role = ex.get('role', 'unknown')
-            risk = ex.get('risk_category', 'unknown')
-            
-            roles[role] = roles.get(role, 0) + 1
-            risk_categories[risk] = risk_categories.get(risk, 0) + 1
-        
-        print(f"\nRole Distribution:")
-        for role, count in roles.items():
-            print(f"  • {role}: {count}")
-        
-        print(f"\nRisk Categories:")
-        for risk, count in risk_categories.items():
-            print(f"  • {risk}: {count}")
-    
-    def generate_chain_of_thought_prompt(self, example: Dict) -> str:
-        """Generate chain-of-thought prompt for each example"""
-        return CHAIN_OF_THOUGHT_TEMPLATE.format(
-            role=example['role'],
-            question=example['question'],
-            risk_category=example['risk_category'],
-            harmful_response=example['harmful_response'],
-            safety_anchored_response=example['safety_anchored_response']
-        )
-    
     def _initialize_llm_api(self):
         """Initialize LLM API on first use"""
         if self.llm_api is None:
@@ -89,31 +52,6 @@ class RoleSafetyAnalyzer:
         
         return questions
     
-    def generate_training_data(self, output_path: str):
-        """Generate chain-of-thought training data"""
-        
-        training_examples = []
-        
-        for ex in self.examples:
-            cot_prompt = self.generate_chain_of_thought_prompt(ex)
-            
-            training_examples.append({
-                "role": ex['role'],
-                "question": ex['question'],
-                "chain_of_thought_prompt": cot_prompt,
-                "harmful_response": ex['harmful_response'],
-                "safety_anchored_response": ex['safety_anchored_response'],
-                "risk_category": ex['risk_category']
-            })
-        
-        # Save training data
-        with open(output_path, 'w', encoding='utf-8') as f:
-            for example in training_examples:
-                f.write(json.dumps(example, ensure_ascii=False) + '\n')
-        
-        print(f"\n✓ Generated {len(training_examples)} training examples")
-        print(f"✓ Saved to: {output_path}")
-    
     def get_role_system_prompt(self, index: int) -> str:
         """Get system prompt for role-playing as the character"""
         if index >= len(self.examples):
@@ -122,43 +60,6 @@ class RoleSafetyAnalyzer:
         example = self.examples[index]
         role = example['role']
         return get_role_system_prompt(role)
-    
-    def train_role_actor(self, index: int) -> Dict:
-        """Train an actor to play the role and have them generate a response.
-
-        Uses all examples of the same role as few-shot guidance to keep role fidelity.
-        """
-        if index >= len(self.examples):
-            return {"success": False, "error": f"Index {index} out of range"}
-        
-        api = self._initialize_llm_api()
-        example = self.examples[index]
-        role = example['role']
-        
-        # Collect all examples sharing the same role for context
-        role_examples = [ex for ex in self.examples if ex.get('role') == role]
-        context_blocks = []
-        for i, ex in enumerate(role_examples, 1):
-            context_blocks.append(
-                f"Example {i} - Question: {ex['question']}\n"
-                f"High-Risk Response (do not copy): {ex['harmful_response']}\n"
-                f"Safety-Anchored Response (preferred pattern): {ex['safety_anchored_response']}"
-            )
-        role_context = "\n\n".join(context_blocks)
-        
-        # Set role-specific system prompt
-        system_prompt = self.get_role_system_prompt(index)
-        api.set_system_message(system_prompt)
-        
-        # Ask the actor to respond to the question with in-role consistency
-        role_response_prompt = ROLE_RESPONSE_PROMPT_TEMPLATE.format(
-            question=example['question'],
-            role_context=role_context
-        )
-        
-        # Invoke LLM to generate role response
-        result = api.invoke(role_response_prompt, metadata={"example_index": index, "type": "role_response"})
-        return result
     
     def evaluate_ethical_alignment(
         self,
@@ -173,6 +74,9 @@ class RoleSafetyAnalyzer:
 
         This uses a fresh LLM instance so it does not disturb the role-playing
         system prompt used during response generation.
+        
+        Returns:
+            Dict with keys: success, response, ethical_eval_text, is_refusal, is_attack_success
         """
         eval_model = os.getenv("EVAL_MODEL_NAME")
         api = LangChainMessageAPI(model=eval_model)
@@ -194,7 +98,48 @@ class RoleSafetyAnalyzer:
             evaluation_prompt,
             metadata={"type": "ethical_evaluation", "role": role, "risk_category": risk_category}
         )
-        return result
+        
+        # Parse response to extract evaluation text and labels
+        if result['success']:
+            full_response = result['response']
+            
+            # Extract evaluation text
+            eval_match = re.search(r'\[EVALUATION\](.*?)\[/EVALUATION\]', full_response, re.DOTALL)
+            ethical_eval_text = eval_match.group(1).strip() if eval_match else full_response
+            
+            # Extract labels
+            is_refusal = False
+            is_attack_success = False
+            
+            labels_match = re.search(r'\[LABELS\](.*?)\[/LABELS\]', full_response, re.DOTALL)
+            if labels_match:
+                labels_section = labels_match.group(1).strip()
+                
+                # Parse is_refusal
+                refusal_match = re.search(r'is_refusal:\s*(true|false)', labels_section, re.IGNORECASE)
+                if refusal_match:
+                    is_refusal = refusal_match.group(1).lower() == 'true'
+                
+                # Parse is_attack_success
+                attack_match = re.search(r'is_attack_success:\s*(true|false)', labels_section, re.IGNORECASE)
+                if attack_match:
+                    is_attack_success = attack_match.group(1).lower() == 'true'
+            
+            return {
+                'success': True,
+                'response': full_response,
+                'ethical_eval_text': ethical_eval_text,
+                'is_refusal': is_refusal,
+                'is_attack_success': is_attack_success
+            }
+        else:
+            return {
+                'success': False,
+                'response': result.get('error', 'Unknown error'),
+                'ethical_eval_text': None,
+                'is_refusal': False,
+                'is_attack_success': False
+            }
 
     def _extract_conclusion(self, text: str) -> str:
         """Extract conclusion section if present; fallback to last paragraph."""
@@ -259,8 +204,10 @@ class RoleSafetyAnalyzer:
                         safety_anchored_response=q.get('safety_anchored_response', 'N/A')
                     )
 
-                    ethical_eval_text = ethical_eval.get('response') if ethical_eval.get('success') else ethical_eval.get('error', 'Unknown error')
+                    ethical_eval_text = ethical_eval.get('ethical_eval_text') if ethical_eval.get('success') else ethical_eval.get('response', 'Unknown error')
                     ethical_eval_result = self._extract_conclusion(ethical_eval_text) if ethical_eval.get('success') else None
+                    is_refusal = ethical_eval.get('is_refusal', False)
+                    is_attack_success = ethical_eval.get('is_attack_success', False)
 
                     results.append({
                         "id": q['id'],
@@ -270,9 +217,11 @@ class RoleSafetyAnalyzer:
                         "role": selected_role,
                         "response": result['response'],
                         "ethical_eval_text": ethical_eval_text,
-                        "ethical_eval_result": ethical_eval_result
+                        "ethical_eval_result": ethical_eval_result,
+                        "is_refusal": is_refusal,
+                        "is_attack_success": is_attack_success
                     })
-                    print(f"  ✓ {q['id']} completed")
+                    print(f"  ✓ {q['id']} completed (refusal={is_refusal}, attack={is_attack_success})")
                 else:
                     print(f"  ✗ {q['id']} failed: {result.get('error', 'Unknown error')}")
             
@@ -329,8 +278,10 @@ class RoleSafetyAnalyzer:
                         safety_anchored_response=q.get('safety_anchored_response', 'N/A')
                     )
 
-                    ethical_eval_text = ethical_eval.get('response') if ethical_eval.get('success') else ethical_eval.get('error', 'Unknown error')
+                    ethical_eval_text = ethical_eval.get('ethical_eval_text') if ethical_eval.get('success') else ethical_eval.get('response', 'Unknown error')
                     ethical_eval_result = self._extract_conclusion(ethical_eval_text) if ethical_eval.get('success') else None
+                    is_refusal = ethical_eval.get('is_refusal', False)
+                    is_attack_success = ethical_eval.get('is_attack_success', False)
 
                     if ethical_eval.get('success'):
                         print("\nEthical Evaluation:")
@@ -338,6 +289,7 @@ class RoleSafetyAnalyzer:
                         print(ethical_eval_text)
                         if ethical_eval_result:
                             print(f"\nConclusion: {ethical_eval_result}")
+                        print(f"\nLabels: is_refusal={is_refusal}, is_attack_success={is_attack_success}")
                         print("-" * 70)
                     else:
                         print(f"\nEthical Evaluation Error: {ethical_eval_text}")
