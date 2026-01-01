@@ -1,50 +1,46 @@
 # Role-Sensitive Ethical Risk Analysis
 
-## 文件說明
+## Repository Contents
 
-### 1. 數據文件
-- `AsiaCement/examples.jsonl` - 亞洲水泥案例數據（已創建）
-- 每行包含一個 JSON 對象，格式如下：
+### 1. Data file
+- `AsiaCement/train.jsonl` – Asia Cement training examples (interactive mode loads this)
+- Each line is one JSON object in the form:
 
 ```json
 {
-  "role": "角色名稱",
-  "question": "問題",
-  "harmful_response": "高風險回應",
-  "safety_anchored_response": "安全錨定回應",
-  "type": "類型",
-  "risk_category": "風險類別"
+  "role": "role name",
+  "question": "question",
+  "harmful_response": "high-risk response",
+  "safety_anchored_response": "safety-anchored response",
+  "type": "type",
+  "risk_category": "risk category"
 }
 ```
 
-### 2. 分析腳本
-- `analyze_role_safety.py` - 主要分析工具
+### 2. Analysis script
+- `app.py` – main analysis tool
 
-## 使用方法
-
-### 基本使用
+## How to Run
 
 ```bash
-cd "/Users/cheng/Documents/Mannheim/2025_Fall/Responsible AI/code"
-python analyze_role_safety.py
+python app.py
 ```
 
-### 功能說明
+## Features
 
-1. **顯示數據統計** - 查看角色分佈和風險類別
-2. **查看案例詳情** - 查看特定案例的完整分析
-3. **生成訓練數據** - 生成帶有 Chain-of-Thought 的訓練數據
-4. **退出** - 結束程序
+1. **Full Role Training & Evaluation** – train the selected role with all role-specific examples from `train.jsonl`, then run batch or single-question evaluation against `AsiaCement/evaluation.jsonl` and save results.
+2. **System Prompt Only Evaluation** – skip training; set the role system prompt and run the same evaluation options.
+3. **Exit** – quit the program.
 
-### Chain-of-Thought 訓練數據
+## Chain-of-Thought output
 
-生成的訓練數據包含：
-- **Role Context** - 角色背景和價值觀
-- **Ethical Risk Assessment** - 倫理風險評估
-- **Response Comparison** - 對比高風險和安全回應
-- **Critical Reflection** - 批判性反思
+Generated training data includes:
+- **Role Context** – role background and values
+- **Ethical Risk Assessment** – assessment of role-sensitive risks
+- **Response Comparison** – harmful vs safety-anchored responses
+- **Critical Reflection** – reasoning about assumptions and mitigation
 
-### 示例輸出
+### Example output
 
 ```
 Chain-of-Thought Analysis:
@@ -64,22 +60,22 @@ What assumptions does the harmful response normalize?
 How does the safety-anchored response maintain role relevance while addressing ethical concerns?
 ```
 
-## 風險類別
+## Risk categories
 
-1. **power_asymmetry_justification** - 權力不對稱的合理化
-2. **marginalization_of_consent** - 邊緣化同意權
-3. **procedural_deflection** - 程序性迴避
+1. **power_asymmetry_justification** – justification of power asymmetry
+2. **marginalization_of_consent** – marginalization of consent
+3. **procedural_deflection** – procedural deflection
 
-## 擴展方法
+## Extending
 
-### 添加新案例
+### Add new cases
 
-在 `AsiaCement/examples.jsonl` 中添加新行：
+Append a new line to `AsiaCement/train.jsonl`:
 
 ```json
-{"role": "角色", "question": "問題", "harmful_response": "...", "safety_anchored_response": "...", "type": "...", "risk_category": "..."}
+{"role": "role", "question": "question", "harmful_response": "...", "safety_anchored_response": "...", "type": "...", "risk_category": "..."}
 ```
 
-### 自定義分析
+### Customize analysis
 
-修改 `analyze_role_safety.py` 中的 `generate_chain_of_thought_prompt()` 方法來自定義 prompt 格式。
+Edit the prompt templates in `prompt.py` (e.g., `TRAINING_PROMPT_TEMPLATE` / `EVALUATION_PROMPT_TEMPLATE`) to adjust the prompt format.
